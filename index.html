@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>到貨審核</title>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+:root {
+  --bg: #F2F4F7; --card: #FFFFFF; --line: #DCE1E7; --fg: #18212B; --muted: #657382;
+  --accent: #1D5C8C; --ok: #138A4F; --ok-bg: #E3F5EC; --warn: #B7791F; --warn-bg: #FDF3DC;
+  --bad: #C0392B; --bad-bg: #FBE6E3;
+}
+* { box-sizing: border-box; }
+[hidden], .hidden { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); overflow-x: hidden;
+  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; font-size: 15px; -webkit-text-size-adjust: 100%; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 12px 14px 120px; }
+header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+header h1 { font-size: 20px; margin: 0; flex: 1; }
+.chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 12px; font-size: 14px; }
+button { font: inherit; cursor: pointer; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 10px 14px; }
+.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
+.btn.ok { background: var(--ok); color: #fff; border-color: var(--ok); font-weight: 700; }
+.btn.danger { color: var(--bad); border-color: var(--bad); background: #fff; }
+.btn:disabled { opacity: .5; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+.muted { color: var(--muted); font-size: 13px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.storeBtn { padding: 18px 10px; font-size: 17px; font-weight: 700; border-radius: 12px; border: 1px solid var(--line); background: var(--card); }
+.tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.tabs button { flex: 1; border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 8px; }
+.tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.order { display: flex; align-items: center; gap: 10px; }
+.order .main { flex: 1; min-width: 0; }
+.order .no { font-weight: 700; font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+.badge { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.b-wait { background: #E8ECF1; color: var(--muted); }
+.b-doing { background: var(--warn-bg); color: var(--warn); }
+.b-ok { background: var(--ok-bg); color: var(--ok); }
+.b-diff { background: var(--bad-bg); color: var(--bad); }
+.bar { height: 10px; background: #E8ECF1; border-radius: 999px; overflow: hidden; margin-top: 6px; }
+.bar > div { height: 100%; background: var(--ok); transition: width .2s; }
+.scanbar { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 0; }
+.scanBtns { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
+.bigBtn { font-size: 18px; font-weight: 700; padding: 16px 8px; border-radius: 14px; border: 0; background: var(--accent); color: #fff; }
+.bigBtn.alt { background: #fff; color: var(--accent); border: 2px solid var(--accent); font-size: 15px; }
+.typeRow { display: flex; gap: 6px; margin-top: 8px; }
+.typeRow input { flex: 1; min-width: 0; font-size: 16px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.fb { margin-top: 8px; border-radius: 12px; padding: 12px; font-size: 16px; font-weight: 700; min-height: 48px; }
+.fb.ok { background: var(--ok-bg); color: var(--ok); }
+.fb.bad { background: var(--bad-bg); color: var(--bad); }
+.fb.warn { background: var(--warn-bg); color: var(--warn); }
+.fb.info { background: #fff; color: var(--muted); font-weight: 400; border: 1px dashed var(--line); }
+.fb small { display: block; font-weight: 400; font-size: 13px; margin-top: 2px; }
+.sec { font-weight: 700; margin: 14px 2px 6px; display: flex; justify-content: space-between; }
+.ln { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--line); border-left: 6px solid #C9D1DA; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+.ln.part { border-left-color: var(--warn); }
+.ln.done { border-left-color: var(--ok); opacity: .75; }
+.ln.over, .ln.extra { border-left-color: var(--bad); background: var(--bad-bg); }
+.ln.flash { animation: flash .8s; }
+@keyframes flash { from { box-shadow: 0 0 0 4px #F5C542; } to { box-shadow: none; } }
+.ln .info { flex: 1; min-width: 0; }
+.ln .t { font-weight: 700; word-break: break-all; }
+.ln .c { font-size: 12px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+.ln .cnt { font-size: 20px; font-weight: 800; font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+.ln .cnt small { font-size: 13px; color: var(--muted); font-weight: 400; }
+.ln .adj { display: flex; flex-direction: column; gap: 4px; }
+.ln .adj button { width: 34px; height: 30px; border: 1px solid var(--line); background: #fff; border-radius: 8px; font-size: 18px; line-height: 1; }
+.footer { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,.96); border-top: 1px solid var(--line); padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
+.footer .in { max-width: 640px; margin: 0 auto; display: flex; gap: 8px; align-items: center; }
+.footer .in .sum { flex: 1; font-size: 14px; }
+.cam { position: fixed; inset: 0; background: #000; z-index: 50; display: flex; flex-direction: column; }
+.cam video { flex: 1; width: 100%; object-fit: cover; }
+.cam .aim { position: absolute; left: 8%; right: 8%; top: 38%; height: 22%; border: 3px solid rgba(255,255,255,.8); border-radius: 12px; pointer-events: none; }
+.cam .bottom { padding: 12px; display: flex; gap: 8px; align-items: center; background: rgba(0,0,0,.6); }
+.cam .msg { flex: 1; color: #fff; font-weight: 700; font-size: 16px; }
+.toast { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); background: var(--fg); color: #fff; padding: 8px 16px; border-radius: 999px; z-index: 60; font-size: 14px; max-width: 90vw; }
+.err { color: var(--bad); }
+.pv { display: flex; gap: 10px; align-items: center; }
+.pv input { width: 22px; height: 22px; }
+.diff { color: var(--bad); font-size: 13px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📦 到貨審核</h1>
+    <button class="chip hidden" id="whoChip"></button>
+  </header>
+  <div id="msg" class="err"></div>
+
+  <!-- GitHub 版第一次開：設定 Apps Script 網址 -->
+  <section id="vSetup" hidden>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:6px">第一次使用：貼上 Apps Script 網址</div>
+      <div class="muted">倉庫給的網址（https://script.google.com/macros/s/…/exec），這支手機會記住。</div>
+      <input id="apiIn" style="width:100%;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:10px;margin-top:8px" placeholder="https://script.google.com/macros/s/.../exec">
+      <button class="btn primary" style="width:100%;margin-top:8px" onclick="saveApi()">儲存</button>
+    </div>
+  </section>
+
+  <!-- 選百貨 -->
+  <section id="vPick" hidden>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:8px">你是哪一家？（這支手機會記住）</div>
+      <div class="grid2" id="storeBtns"></div>
+      <button class="btn" style="width:100%;margin-top:10px" onclick="pickStore('倉庫')">🏭 倉庫（建立審核單、看結果）</button>
+    </div>
+    <div class="card">
+      <label class="muted">審核人名字（可不填，會記在審核紀錄）</label>
+      <input id="whoName" style="width:100%;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:10px;margin-top:4px" placeholder="例如 小美">
+    </div>
+  </section>
+
+  <!-- 百貨：出貨單清單 -->
+  <section id="vList" hidden>
+    <div class="tabs"><button id="tWait" class="on" onclick="setTab('wait')">待審核</button><button id="tDone" onclick="setTab('done')">已完成</button></div>
+    <div id="orderList"></div>
+  </section>
+
+  <!-- 倉庫 -->
+  <section id="vWh" hidden>
+    <div class="card">
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="flex:1;font-weight:700">從「匯入」建立審核單</div>
+        <button class="btn primary" onclick="loadPreview()">讀取「匯入」</button>
+      </div>
+      <div id="pvBox" class="muted" style="margin-top:8px">倉庫把出貨單貼到「匯入」工作表後，按「讀取」再建立。</div>
+    </div>
+    <div class="tabs"><button id="wAll" class="on" onclick="setWhTab('')">全部</button><button id="wOpen" onclick="setWhTab('open')">還沒完成</button><button id="wDiff" onclick="setWhTab('diff')">有差異</button></div>
+    <div id="whList"></div>
+  </section>
+
+  <!-- 審核一張單 -->
+  <section id="vOrder" hidden>
+    <div class="card">
+      <div class="order"><div class="main"><div class="muted" id="oStore"></div><div class="no" id="oNo"></div></div><span id="oBadge"></span></div>
+      <div class="bar"><div id="oBar" style="width:0"></div></div>
+      <div class="muted" id="oProg" style="margin-top:4px"></div>
+      <div class="diff" id="oDiff"></div>
+    </div>
+    <div class="scanbar" id="scanBox">
+      <div class="scanBtns">
+        <button class="bigBtn" onclick="takePhoto()">📷 拍條碼</button>
+        <button class="bigBtn alt" onclick="startLive()">🎥 連續掃</button>
+      </div>
+      <input type="file" id="photo" accept="image/*" capture="environment" hidden>
+      <div class="typeRow">
+        <input id="codeIn" placeholder="手動輸入條碼（或用藍牙條碼槍）" autocomplete="off" autocapitalize="characters" enterkeyhint="done">
+        <button class="btn" onclick="typed()">加入</button>
+      </div>
+      <div class="fb info" id="fb">拍一張商品吊牌上的條碼，就會自動 +1</div>
+    </div>
+    <div id="lines"></div>
+  </section>
+</div>
+
+<div class="footer hidden" id="foot"><div class="in">
+  <button class="btn" onclick="backToList()">‹ 返回</button>
+  <div class="sum" id="fSum"></div>
+  <button class="btn ok" id="finBtn" onclick="doFinish()">完成審核</button>
+</div></div>
+
+<div class="cam hidden" id="cam">
+  <video id="vid" playsinline muted></video>
+  <div class="aim"></div>
+  <div class="bottom"><div class="msg" id="camMsg">把條碼對準框框</div><button class="btn" onclick="stopLive()">關閉</button></div>
+</div>
+<div class="toast hidden" id="toast"></div>
+
+<script>
+// ---------- 共用 ----------
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ls = { get: k => { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+             set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+// 兩種開法：
+//   1. Apps Script 網址開（google.script.run）
+//   2. 放在 GitHub Pages 開（可以用即時相機）：網址後面帶 ?api=Apps Script 網址，會記在這支手機
+const IN_GAS = !!(window.google && google.script && google.script.run);
+const API_URL = (() => {
+  if (IN_GAS) return '';
+  let q = ''; try { q = new URLSearchParams(location.search).get('api') || ''; } catch (e) {}
+  if (/^https:\/\/script\.google\.com\/.+\/exec/.test(q)) { ls.set('aud.api', q); return q; }
+  return ls.get('aud.api');
+})();
+function run(fn, ...args) {
+  if (IN_GAS) return new Promise((ok, no) => google.script.run.withSuccessHandler(ok).withFailureHandler(no)[fn](...args));
+  if (!API_URL) return Promise.reject(new Error('還沒設定 Apps Script 網址'));
+  return fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn, args }) })
+    .then(r => r.json())
+    .then(j => { if (!j.ok) throw new Error(j.error || '發生錯誤'); return j.data; })
+    .catch(e => { throw new Error(/Failed to fetch|NetworkError|JSON/.test(e.message) ? '連不到 Apps Script（檢查網路，或網址／部署權限要設「所有人」）' : e.message); });
+}
+function toast(t) { const el = $('toast'); el.textContent = t; el.classList.remove('hidden'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.add('hidden'), 2000); }
+function showErr(e) { $('msg').textContent = e ? '⚠ ' + (e.message || e) : ''; }
+function show(view) {
+  ['vSetup', 'vPick', 'vList', 'vWh', 'vOrder'].forEach(v => $(v).hidden = v !== view);
+  $('foot').classList.toggle('hidden', view !== 'vOrder');
+  window.scrollTo(0, 0);
+}
+const norm = s => String(s == null ? '' : s).trim().toUpperCase().replace(/\s+/g, '').replace(/^\*+|\*+$/g, '');
+const keys = c => { c = norm(c); if (!c) return []; return c.indexOf('AROAK-') === 0 ? [c, c.slice(6)] : [c, 'AROAK-' + c]; };
+const BADGE = { '待審核': 'b-wait', '審核中': 'b-doing', '相符': 'b-ok', '有差異': 'b-diff' };
+const badge = s => `<span class="badge ${BADGE[s] || 'b-wait'}">${esc(s === '相符' ? '✅ 相符' : s === '有差異' ? '⚠ 有差異' : s)}</span>`;
+
+// 回饋聲音／震動
+let actx = null;
+function beep(ok) {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.value = ok ? 1200 : 300; o.type = ok ? 'sine' : 'square';
+    g.gain.value = .15; o.connect(g); g.connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + (ok ? .12 : .35));
+  } catch (e) {}
+  try { navigator.vibrate && navigator.vibrate(ok ? 60 : [120, 60, 120]); } catch (e) {}
+}
+
+// ---------- 狀態 ----------
+const S = { store: ls.get('aud.store'), who: ls.get('aud.who'), stores: [], needPw: false, tab: 'wait', whTab: '',
+            audits: [], order: null, pending: {}, inflight: {}, flushing: false, whPw: ls.get('aud.whpw') };
+
+async function boot() {
+  if (!IN_GAS && !API_URL) { show('vSetup'); return; }
+  $('whoName').value = S.who;
+  $('whoName').onchange = () => { S.who = $('whoName').value.trim(); ls.set('aud.who', S.who); };
+  try {
+    const r = await run('init');
+    S.stores = r.stores; S.needPw = r.needPw; S.liveUrl = r.liveUrl || '';
+  } catch (e) { showErr(e); }
+  $('storeBtns').innerHTML = S.stores.length ? S.stores.map(s => `<button class="storeBtn" data-s="${esc(s)}">${esc(s)}</button>`).join('')
+    : '<div class="muted" style="grid-column:1/-1">還沒有任何出貨單。請倉庫先建立審核單。</div>';
+  $('storeBtns').onclick = e => { const b = e.target.closest('[data-s]'); if (b) pickStore(b.dataset.s); };
+  if (S.store) pickStore(S.store); else show('vPick');
+}
+
+function pickStore(s) {
+  S.store = s; ls.set('aud.store', s);
+  $('whoChip').textContent = (s === '倉庫' ? '🏭 ' : '🏬 ') + s + ' ▾';
+  $('whoChip').classList.remove('hidden');
+  $('whoChip').onclick = () => { stopLive(); show('vPick'); };
+  if (s === '倉庫') { show('vWh'); loadWh(); } else { show('vList'); loadList(); }
+}
+
+// ---------- 百貨：清單 ----------
+function setTab(t) { S.tab = t; $('tWait').classList.toggle('on', t === 'wait'); $('tDone').classList.toggle('on', t === 'done'); renderList(); }
+async function loadList() {
+  $('orderList').innerHTML = '<div class="muted">讀取中…</div>';
+  try { S.audits = await run('listAudits', S.store); showErr(''); } catch (e) { showErr(e); S.audits = []; }
+  renderList();
+}
+function orderCard(a, wh) {
+  const pct = a.expected ? Math.min(100, Math.round(a.scanned / a.expected * 100)) : 0;
+  return `<div class="card order" data-no="${esc(a.no)}" style="cursor:pointer">
+    <div class="main">
+      ${wh ? `<div style="font-weight:700">${esc(a.store)}</div>` : ''}
+      <div class="no">${esc(a.no)}</div>
+      <div class="muted">${esc(a.created)}　應到 ${a.expected} 件・已刷 ${a.scanned} 件${a.done ? '　完成 ' + esc(a.done) : ''}${a.who ? '　' + esc(a.who) : ''}</div>
+      <div class="bar"><div style="width:${pct}%;${a.status === '有差異' ? 'background:var(--bad)' : ''}"></div></div>
+      ${a.diff ? `<div class="diff">${esc(a.diff)}</div>` : ''}
+    </div>${badge(a.status)}</div>`;
+}
+function renderList() {
+  const done = s => s === '相符' || s === '有差異';
+  const list = S.audits.filter(a => S.tab === 'done' ? done(a.status) : !done(a.status));
+  $('orderList').innerHTML = list.length ? list.map(a => orderCard(a)).join('')
+    : `<div class="card muted">${S.tab === 'done' ? '還沒有完成的審核' : '沒有待審核的出貨單 👍'}</div>`;
+  $('orderList').onclick = e => { const c = e.target.closest('[data-no]'); if (c) openOrder(c.dataset.no); };
+}
+
+// ---------- 審核一張單 ----------
+async function openOrder(no) {
+  showErr('');
+  try {
+    S.order = await run('getAudit', no);
+    S.pending = {}; S.inflight = {};
+    show('vOrder'); renderOrder();
+    setFb('info', '拍一張商品吊牌上的條碼，就會自動 +1');
+  } catch (e) { showErr(e); }
+}
+function backToList() { stopLive(); flush().then(() => S.store === '倉庫' ? (show('vWh'), loadWh()) : (show('vList'), loadList())); }
+const closed = () => S.order && (S.order.status === '相符' || S.order.status === '有差異');
+
+// 畫面上的數量＝伺服器＋還沒送出的
+function shown(l) { return l.got + (S.inflight[l.code] || 0) + (S.pending[l.code] || 0); }
+function findLine(code) {
+  const ks = keys(code);
+  return S.order.lines.find(l => keys(l.code).some(k => ks.indexOf(k) >= 0));
+}
+
+function renderOrder(flashCode) {
+  const o = S.order;
+  $('oStore').textContent = o.store + '　建立 ' + o.created;
+  $('oNo').textContent = o.no;
+  $('oBadge').innerHTML = badge(o.status);
+  // 多刷但還沒送到伺服器的條碼，先顯示成暫時的一列
+  const extraLocal = Object.keys(Object.assign({}, S.inflight, S.pending))
+    .filter(c => !findLine(c)).map(c => ({ code: c, sku: '', name: '（不在單上，存檔中…）', style: '', qty: 0, got: 0 }));
+  const lines = o.lines.concat(extraLocal);
+  const exp = lines.reduce((a, l) => a + l.qty, 0), got = lines.reduce((a, l) => a + Math.min(shown(l), l.qty), 0);
+  const all = lines.reduce((a, l) => a + shown(l), 0);
+  $('oBar').style.width = (exp ? Math.min(100, got / exp * 100) : 0) + '%';
+  $('oProg').textContent = `應到 ${exp} 件，已刷 ${all} 件` + (all > got ? `（其中 ${all - got} 件是多的）` : '') + (exp > got ? `，還差 ${exp - got} 件` : '');
+  $('oDiff').textContent = o.diff || '';
+  $('scanBox').classList.toggle('hidden', closed());
+  $('finBtn').classList.toggle('hidden', closed());
+  $('fSum').innerHTML = closed() ? `${badge(o.status)} ${esc(o.done || '')}` : `<b>${all}</b> / ${exp} 件`;
+
+  const cls = l => { const n = shown(l); return l.qty === 0 ? 'extra' : n > l.qty ? 'over' : n === l.qty ? 'done' : n > 0 ? 'part' : ''; };
+  const groups = [
+    ['⚠ 有問題（多刷／不在單上）', lines.filter(l => ['over', 'extra'].includes(cls(l)))],
+    ['還沒刷齊', lines.filter(l => ['', 'part'].includes(cls(l)))],
+    ['✅ 已刷齊', lines.filter(l => cls(l) === 'done')]
+  ];
+  const ro = closed() || S.store === '倉庫';
+  $('lines').innerHTML = groups.filter(g => g[1].length).map(([t, ls]) =>
+    `<div class="sec"><span>${t}</span><span class="muted">${ls.length} 款</span></div>` +
+    ls.map(l => `<div class="ln ${cls(l)} ${flashCode && l.code === flashCode ? 'flash' : ''}" data-code="${esc(l.code)}">
+      <div class="info"><div class="t">${esc(l.sku || '')} ${esc(l.style || '')}</div>
+        <div class="muted">${esc(l.name || '')}</div><div class="c">${esc(l.code)}</div></div>
+      <div class="cnt">${shown(l)}<small> / ${l.qty}</small></div>
+      ${ro ? '' : `<div class="adj"><button data-d="1">＋</button><button data-d="-1">－</button></div>`}
+    </div>`).join('')).join('') || '<div class="card muted">這張單沒有商品</div>';
+}
+
+$('lines').addEventListener('click', e => {
+  const b = e.target.closest('button[data-d]'); if (!b) return;
+  const code = b.closest('.ln').dataset.code, d = Number(b.dataset.d);
+  const l = findLine(code) || { code, qty: 0, got: 0 };
+  if (d < 0 && shown(l) <= 0) return;
+  addCount(code, d);
+  setFb(d > 0 ? 'ok' : 'warn', (d > 0 ? '＋1 ' : '－1 ') + (l.sku || code) + ' ' + (l.style || ''), `${shown(l)} / ${l.qty}`);
+  renderOrder(code);
+});
+
+function setFb(kind, text, sub) { $('fb').className = 'fb ' + kind; $('fb').innerHTML = esc(text) + (sub ? `<small>${esc(sub)}</small>` : ''); }
+
+function addCount(code, d) {
+  S.pending[code] = (S.pending[code] || 0) + d;
+  if (!S.pending[code]) delete S.pending[code];
+  clearTimeout(addCount.t); addCount.t = setTimeout(flush, 800);
+}
+
+// 刷到一個條碼
+function onCode(raw, src) {
+  if (!S.order || closed()) return;
+  const code = norm(raw);
+  if (!code) return;
+  if (code === norm(S.order.no) || /^0027\d{11}$/.test(code)) { beep(false); return setFb('warn', '這是出貨單的條碼', '請刷商品吊牌上的條碼'); }
+  const l = findLine(code);
+  if (l) {
+    addCount(l.code, 1);
+    const n = shown(l);
+    if (n > l.qty) { beep(false); setFb('bad', '❗ 多了：' + (l.sku || l.code) + ' ' + l.style, `已刷 ${n}，單上只有 ${l.qty} 件`); }
+    else { beep(true); setFb('ok', (n === l.qty ? '✅ 到齊 ' : '＋1 ') + (l.sku || l.code) + ' ' + l.style, `${n} / ${l.qty}　${l.name}`); }
+    renderOrder(l.code);
+  } else {
+    addCount(code, 1);
+    beep(false); setFb('bad', '❗ 不在這張單上：' + code, '已記錄成「多出」，刷錯可以按「－」扣掉');
+    renderOrder(code);
+  }
+  if (src === 'live') $('camMsg').textContent = $('fb').textContent;
+}
+
+async function flush() {
+  if (S.flushing || !S.order || !Object.keys(S.pending).length) return;
+  S.flushing = true;
+  S.inflight = S.pending; S.pending = {};
+  try {
+    S.order = await run('scan', S.order.no, S.inflight, S.who);
+    S.inflight = {};
+    showErr('');
+  } catch (e) {
+    // 送失敗：放回待送，稍後再試
+    Object.keys(S.inflight).forEach(k => S.pending[k] = (S.pending[k] || 0) + S.inflight[k]);
+    S.inflight = {};
+    showErr(new Error('存檔失敗，會自動重試：' + (e.message || e)));
+    setTimeout(flush, 3000);
+  }
+  S.flushing = false;
+  renderOrder();
+  if (Object.keys(S.pending).length) setTimeout(flush, 300);
+}
+
+function typed() { const v = $('codeIn').value; $('codeIn').value = ''; onCode(v, 'type'); $('codeIn').focus(); }
+$('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); typed(); } });
+
+async function doFinish() {
+  await flush();
+  const o = S.order, short = [], over = [];
+  o.lines.forEach(l => { if (l.got < l.qty) short.push(`${l.sku || l.code} ${l.style} 少 ${l.qty - l.got}`); if (l.got > l.qty) over.push(`${l.sku || l.code} ${l.style} ${l.qty ? '多 ' + (l.got - l.qty) : '不在單上 ×' + l.got}`); });
+  const msg = short.length || over.length
+    ? '還有差異：\n' + short.concat(over).slice(0, 12).join('\n') + (short.length + over.length > 12 ? '\n…' : '') + '\n\n確定這樣送出審核結果？'
+    : '全部相符 👍 送出審核結果？';
+  if (!confirm(msg)) return;
+  $('finBtn').disabled = true;
+  try { S.order = await run('finish', o.no, S.who); renderOrder(); toast(S.order.status === '相符' ? '✅ 審核完成，全部相符' : '⚠ 已送出，倉庫會看到差異'); }
+  catch (e) { showErr(e); }
+  $('finBtn').disabled = false;
+}
+
+// ---------- 拍照解碼 ----------
+function takePhoto() { $('photo').value = ''; $('photo').click(); }
+$('photo').addEventListener('change', async () => {
+  const f = $('photo').files[0]; if (!f) return;
+  setFb('info', '辨識中…');
+  try {
+    const code = await decodeFile(f);
+    if (code) onCode(code, 'photo');
+    else { beep(false); setFb('warn', '看不到條碼', '靠近一點、條碼放正、不要反光再拍一次；或在上面手動輸入'); }
+  } catch (e) { setFb('warn', '辨識失敗：' + (e.message || e)); }
+});
+
+const FORMATS = ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'qr_code', 'itf', 'codabar'];
+let zxReader = null, zxHints = null;
+function zx() {
+  if (zxReader || !window.ZXing) return zxReader;
+  const hints = zxHints = new Map();
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.CODABAR]);
+  zxReader = new ZXing.MultiFormatReader(); zxReader.setHints(hints);
+  return zxReader;
+}
+
+async function decodeFile(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('讀不到照片')); i.src = url; });
+    let det = null;
+    if ('BarcodeDetector' in window) { try { det = new BarcodeDetector({ formats: FORMATS }); } catch (e) { det = null; } }
+    for (const size of [1400, 2000, 900]) {
+      for (const rot of [0, 90]) {
+        const c = drawScaled(img, size, rot);
+        if (det) { try { const r = await det.detect(c); if (r && r.length) return r[0].rawValue; } catch (e) {} }
+        const z = zx();
+        if (z) {
+          try {
+            const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)));
+            return z.decode(bmp).getText();
+          } catch (e) { /* 這個大小／角度找不到，換下一個 */ }
+        }
+      }
+    }
+    return null;
+  } finally { URL.revokeObjectURL(url); }
+}
+function drawScaled(img, max, rot) {
+  const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.round(img.naturalWidth * s), h = Math.round(img.naturalHeight * s);
+  const c = document.createElement('canvas');
+  c.width = rot ? h : w; c.height = rot ? w : h;
+  const g = c.getContext('2d');
+  if (rot) { g.translate(h / 2, w / 2); g.rotate(rot * Math.PI / 180); g.drawImage(img, -w / 2, -h / 2, w, h); }
+  else g.drawImage(img, 0, 0, w, h);
+  return c;
+}
+
+// ---------- 連續掃（即時相機；有些手機／瀏覽器不允許，就改用拍照） ----------
+let liveCtl = null, lastLive = { code: '', t: 0 };
+async function startLive() {
+  if (!window.ZXing) return setFb('warn', '掃描元件沒載入，請重新整理');
+  $('cam').classList.remove('hidden');
+  $('camMsg').textContent = '開啟相機中…';
+  try {
+    const reader = new ZXing.BrowserMultiFormatReader(zx() ? zxHints : undefined, 300);
+    liveCtl = reader;
+    await reader.decodeFromConstraints({ video: { facingMode: 'environment', width: { ideal: 1280 } } }, $('vid'), (res) => {
+      if (!res) return;
+      const code = res.getText(), t = Date.now();
+      if (code === lastLive.code && t - lastLive.t < 2500) return;   // 同一個條碼 2.5 秒內不重複算
+      lastLive = { code, t };
+      onCode(code, 'live');
+    });
+    $('camMsg').textContent = '把條碼對準框框';
+  } catch (e) {
+    stopLive();
+    if (IN_GAS && S.liveUrl) {
+      setFb('warn', '這個網址不能開即時相機', '');
+      $('fb').innerHTML += `<a class="btn primary" style="display:block;text-align:center;margin-top:8px;text-decoration:none" target="_blank" href="${esc(S.liveUrl)}">🎥 開「連續掃」版本</a>`;
+    } else setFb('warn', '這支手機在這個網頁不能開即時相機', '請改用「📷 拍條碼」（一樣會自動辨識）');
+  }
+}
+function stopLive() {
+  try { liveCtl && liveCtl.reset(); } catch (e) {}
+  liveCtl = null;
+  $('cam').classList.add('hidden');
+}
+
+// ---------- 倉庫 ----------
+function whPw() {
+  if (!S.needPw) return '';
+  if (!S.whPw) { S.whPw = prompt('倉庫密碼') || ''; ls.set('aud.whpw', S.whPw); }
+  return S.whPw;
+}
+function pwFail(e) { if (/密碼/.test(e.message || '')) { S.whPw = ''; ls.set('aud.whpw', ''); } showErr(e); }
+
+let pvList = [];
+async function loadPreview() {
+  $('pvBox').innerHTML = '讀取中…';
+  try {
+    pvList = await run('previewImport', whPw());
+    if (!pvList.length) { $('pvBox').textContent = '「匯入」裡沒有資料'; return; }
+    $('pvBox').innerHTML = pvList.map((o, i) => `<label class="pv card" style="margin:8px 0 0">
+        <input type="checkbox" data-i="${i}" ${o.exists && o.exists !== '待審核' ? '' : 'checked'}>
+        <div style="flex:1"><b>${esc(o.store)}</b>　${o.total} 件／${o.kinds} 款<div class="no muted">${esc(o.no)}</div>
+        ${o.exists ? `<div class="diff">已經建立過（${esc(o.exists)}），再建立會覆蓋</div>` : ''}</div></label>`).join('') +
+      `<label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="pvForce"> 覆蓋已經開始刷的單（會清掉刷過的紀錄）</label>
+       <button class="btn primary" style="width:100%;margin-top:8px" onclick="createSel()">建立審核單</button>`;
+  } catch (e) { $('pvBox').textContent = ''; pwFail(e); }
+}
+async function createSel() {
+  const nos = [...document.querySelectorAll('#pvBox input[data-i]:checked')].map(c => pvList[c.dataset.i].no);
+  if (!nos.length) return toast('請勾要建立的單');
+  try {
+    const r = await run('createAudits', whPw(), nos, $('pvForce').checked);
+    toast('✅ 已建立：' + r.join('、'));
+    $('pvBox').textContent = '已建立：' + r.join('、');
+    loadWh();
+  } catch (e) { pwFail(e); }
+}
+function setWhTab(t) { S.whTab = t; $('wAll').classList.toggle('on', t === ''); $('wOpen').classList.toggle('on', t === 'open'); $('wDiff').classList.toggle('on', t === 'diff'); renderWh(); }
+async function loadWh() {
+  $('whList').innerHTML = '<div class="muted">讀取中…</div>';
+  try { S.audits = await run('listAudits', ''); showErr(''); } catch (e) { showErr(e); S.audits = []; }
+  renderWh();
+}
+function renderWh() {
+  const list = S.audits.filter(a => !S.whTab || (S.whTab === 'diff' ? a.status === '有差異' : a.status === '待審核' || a.status === '審核中'));
+  $('whList').innerHTML = list.length ? list.map(a => orderCard(a, true) +
+      `<div style="display:flex;gap:6px;justify-content:flex-end;margin:-6px 0 12px">
+        ${a.status === '相符' || a.status === '有差異' ? `<button class="btn" data-re="${esc(a.no)}">↩ 重新開放</button>` : ''}
+        <button class="btn danger" data-del="${esc(a.no)}">刪除</button></div>`).join('')
+    : '<div class="card muted">沒有資料</div>';
+}
+$('whList').addEventListener('click', async e => {
+  const re = e.target.closest('[data-re]'), del = e.target.closest('[data-del]'), c = e.target.closest('[data-no]');
+  try {
+    if (re) { await run('reopen', whPw(), re.dataset.re); toast('已重新開放'); return loadWh(); }
+    if (del) { if (!confirm('刪除這張審核單和刷過的紀錄？')) return; S.audits = await run('deleteAudit', whPw(), del.dataset.del); return renderWh(); }
+    if (c) openOrder(c.dataset.no);
+  } catch (err) { pwFail(err); }
+});
+
+function saveApi() {
+  const v = $('apiIn').value.trim();
+  if (!/^https:\/\/script\.google\.com\/.+\/exec/.test(v)) return alert('網址要是 https://script.google.com/macros/s/…/exec');
+  ls.set('aud.api', v); location.href = location.pathname + '?api=' + encodeURIComponent(v);
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) { flush(); stopLive(); } });
+boot();
+</script>
+</body>
+</html>
