@@ -77,6 +77,9 @@ button { font: inherit; cursor: pointer; }
 .cam .aim { position: absolute; left: 8%; right: 8%; top: 38%; height: 22%; border: 3px solid rgba(255,255,255,.8); border-radius: 12px; pointer-events: none; }
 .cam .bottom { padding: 12px; display: flex; gap: 8px; align-items: center; background: rgba(0,0,0,.6); }
 .cam .msg { flex: 1; color: #fff; font-weight: 700; font-size: 16px; }
+.cam .camTop { position: absolute; left: 0; right: 0; top: 0; padding: 8px 12px; background: rgba(0,0,0,.45); color: #fff; font-size: 12px; }
+.cam .zoomRow { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 14px; }
+.cam .zoomRow input { flex: 1; }
 .toast { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); background: var(--fg); color: #fff; padding: 8px 16px; border-radius: 999px; z-index: 60; font-size: 14px; max-width: 90vw; }
 .err { color: var(--bad); }
 .pv { display: flex; gap: 10px; align-items: center; }
@@ -167,7 +170,13 @@ button { font: inherit; cursor: pointer; }
 <div class="cam hidden" id="cam">
   <video id="vid" playsinline muted></video>
   <div class="aim"></div>
-  <div class="bottom"><div class="msg" id="camMsg">把條碼對準框框</div><button class="btn" onclick="stopLive()">關閉</button></div>
+  <div class="camTop">
+    <div id="camInfo"></div>
+    <div class="zoomRow hidden" id="zoomRow">🔍 <input type="range" id="zoom" min="1" max="4" step="0.1" value="1"> <span id="zoomVal"></span></div>
+  </div>
+  <div class="bottom"><div class="msg" id="camMsg">把條碼對準框框</div>
+    <button class="btn hidden" id="camSwitch" onclick="switchCam()">🔄 換鏡頭</button>
+    <button class="btn" onclick="stopLive()">關閉</button></div>
 </div>
 <div class="toast hidden" id="toast"></div>
 
@@ -506,30 +515,81 @@ async function startLive() {
   }
   $('cam').classList.remove('hidden');
   $('camMsg').textContent = '開啟相機中…';
-  let stream = null, err = null;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
-  } catch (e) {
-    err = e;
-    if (e && (e.name === 'OverconstrainedError' || e.name === 'ConstraintNotSatisfiedError')) {
-      try { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); err = null; } catch (e2) { err = e2; }
-    }
+  liveDet = null;
+  if ('BarcodeDetector' in window) {
+    try { const ok = await BarcodeDetector.getSupportedFormats(); if (FORMATS.some(f => ok.indexOf(f) >= 0)) liveDet = new BarcodeDetector({ formats: FORMATS.filter(f => ok.indexOf(f) >= 0) }); } catch (e) { liveDet = null; }
   }
-  if (!stream) return liveFail(...camError(err));
-  liveStream = stream;
+  // 先用預設後鏡頭開一次（取得權限後才看得到鏡頭名稱），再挑主鏡頭
+  const err = await openCam(ls.get('aud.cam') || '');
+  if (err) return liveFail(...camError(err));
   try {
-    const v = $('vid');
-    v.setAttribute('playsinline', ''); v.muted = true; v.srcObject = stream;
-    await v.play();
-    // 能自動對焦的手機打開連續對焦
-    try { const tr = stream.getVideoTracks()[0], cap = tr.getCapabilities ? tr.getCapabilities() : {};
-          if (cap.focusMode && cap.focusMode.indexOf('continuous') >= 0) await tr.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
-    liveDet = null;
-    if ('BarcodeDetector' in window) { try { liveDet = new BarcodeDetector({ formats: FORMATS }); } catch (e) { liveDet = null; } }
-    liveN = 0;
-    $('camMsg').textContent = '條碼整條放進畫面；同款要移開再對準才會再 +1';
-    liveLoop();
-  } catch (e) { liveFail(...camError(e)); }
+    const all = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const back = all.filter(d => /back|rear|environment|後|背/i.test(d.label));
+    camList = back.length ? back : all;
+    $('camSwitch').classList.toggle('hidden', camList.length < 2);
+    const curId = liveStream && liveStream.getVideoTracks()[0].getSettings().deviceId;
+    if (!ls.get('aud.cam') && camList.length > 1) {
+      // 三星等手機常預設開到超廣角（不能對焦）；主鏡頭通常是「camera2 0」或清單第一個後鏡頭
+      const main = camList.find(d => /camera2 0\b|camera 0\b|\b0, facing back/i.test(d.label)) || camList.find(d => !/wide|超廣角|ultra/i.test(d.label)) || camList[0];
+      if (main && main.deviceId !== curId) { const e2 = await openCam(main.deviceId); if (e2) await openCam(''); }
+    }
+  } catch (e) {}
+  liveN = 0;
+  $('camMsg').textContent = '條碼橫放在畫面中間；同款要移開再對準才會再 +1';
+  liveLoop();
+}
+
+let camList = [];
+// 開某一顆鏡頭（deviceId 空白＝預設後鏡頭）；成功回傳 null，失敗回傳錯誤
+async function openCam(deviceId) {
+  try { liveStream && liveStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  let stream = null, err = null;
+  const size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const tries = deviceId ? [{ deviceId: { exact: deviceId }, ...size }] : [{ facingMode: { ideal: 'environment' }, ...size }, true];
+  for (const v of tries) {
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: v }); err = null; break; } catch (e) { err = e; }
+  }
+  if (!stream) { liveStream = null; return err; }
+  liveStream = stream;
+  const vid = $('vid');
+  vid.setAttribute('playsinline', ''); vid.muted = true; vid.srcObject = stream;
+  try { await vid.play(); } catch (e) {}
+  const tr = stream.getVideoTracks()[0];
+  let cap = {};
+  try { cap = tr.getCapabilities ? tr.getCapabilities() : {}; } catch (e) {}
+  // 連續自動對焦
+  try { if (cap.focusMode && cap.focusMode.indexOf('continuous') >= 0) await tr.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
+  // 放大（有支援的手機才顯示），預設 1.5 倍讓細條碼變粗
+  if (cap.zoom && cap.zoom.max > 1) {
+    const z = $('zoom');
+    z.min = cap.zoom.min || 1; z.max = Math.min(cap.zoom.max, 6); z.step = cap.zoom.step || 0.1;
+    const want = Math.min(Number(ls.get('aud.zoom')) || 1.5, Number(z.max));
+    z.value = want; $('zoomVal').textContent = Number(want).toFixed(1) + 'x';
+    try { await tr.applyConstraints({ advanced: [{ zoom: want }] }); } catch (e) {}
+    z.oninput = async () => {
+      $('zoomVal').textContent = Number(z.value).toFixed(1) + 'x'; ls.set('aud.zoom', z.value);
+      try { await tr.applyConstraints({ advanced: [{ zoom: Number(z.value) }] }); } catch (e) {}
+    };
+    $('zoomRow').classList.remove('hidden');
+  } else $('zoomRow').classList.add('hidden');
+  setTimeout(camInfo, 600);
+  return null;
+}
+function camInfo() {
+  if (!liveStream) return;
+  const tr = liveStream.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
+  $('camInfo').textContent = `${tr.label || '相機'}・${$('vid').videoWidth}×${$('vid').videoHeight}・${liveDet ? '手機內建辨識' : '網頁辨識'}`;
+}
+async function switchCam() {
+  if (camList.length < 2) return;
+  const cur = liveStream && liveStream.getVideoTracks()[0].getSettings().deviceId;
+  const i = camList.findIndex(d => d.deviceId === cur);
+  const next = camList[(i + 1) % camList.length];
+  $('camMsg').textContent = '換鏡頭中…';
+  const e = await openCam(next.deviceId);
+  if (e) { $('camMsg').textContent = '這顆鏡頭開不了，換回來'; await openCam(cur); return; }
+  ls.set('aud.cam', next.deviceId);
+  $('camMsg').textContent = '已換鏡頭，看哪一顆畫面最清楚';
 }
 
 // 連續掃：每 0.2 秒抓一張畫面，先用手機內建辨識，再把中間那條放大給 ZXing 辨識
