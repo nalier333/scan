@@ -416,14 +416,14 @@ $('photo').addEventListener('change', async () => {
   } catch (e) { setFb('warn', '辨識失敗：' + (e.message || e)); }
 });
 
-const FORMATS = ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'qr_code', 'itf', 'codabar'];
+// 吊牌是 Code 128、出貨單是 Code 39；其他格式容易把細條碼誤認成一串數字，所以不開
+const FORMATS = ['code_128', 'code_39'];
 let zxReader = null, zxHints = null;
 function zx() {
   if (zxReader || !window.ZXing) return zxReader;
   const hints = zxHints = new Map();
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.EAN_13,
-    ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.CODABAR]);
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39]);
   zxReader = new ZXing.MultiFormatReader(); zxReader.setHints(hints);
   return zxReader;
 }
@@ -446,11 +446,11 @@ async function decodeFile(file) {
     for (const size of [0, 1400, 2000, 900]) {   // 0＝原尺寸（太大才縮小）
       for (const rot of [0, 90]) {
         const c = drawScaled(img, size, rot);
-        if (det) { try { const r = await det.detect(c); if (r && r.length) return r[0].rawValue; } catch (e) {} }
+        if (det) { try { const r = await det.detect(c); const hit = (r || []).find(x => plausible(x.rawValue)); if (hit) return hit.rawValue; } catch (e) {} }
         const z = zx();
         if (z) {
           const t = zxDecode(c);
-          if (t) return t;
+          if (t && plausible(t)) return t;
         }
       }
     }
@@ -534,23 +534,36 @@ async function startLive() {
 
 // 連續掃：每 0.2 秒抓一張畫面，先用手機內建辨識，再把中間那條放大給 ZXing 辨識
 let liveDet = null, liveN = 0, liveTimer = null;
+// 看起來像我們的條碼嗎：商品條碼有英文字（例如 UT40-88-M），出貨單是 0027 開頭 15 碼
+const plausible = c => { c = norm(c); return c.length >= 5 && (/[A-Z]/.test(c) || /^0027\d{11}$/.test(c)); };
+
+// 連續掃：抓畫面辨識；同一個結果連續讀到 2 次才算數（避免看錯）
+// 每輪只跑一種 ZXing 方式，輪流：中間一條原尺寸 → 中間一條放大 1.5 倍 → 較寬一條原尺寸
+let liveCand = { code: '', n: 0 };
 async function liveLoop() {
   if (!liveStream) return;
   const v = $('vid');
   let code = null;
   if (v.videoWidth) {
     liveN++;
-    if (liveDet) { try { const r = await liveDet.detect(v); if (r && r.length) code = r[0].rawValue; } catch (e) {} }
-    // 每次試三種：原尺寸中間一條、原尺寸整張、放大兩倍中間一條（條碼很細時）
-    if (!code) code = zxDecode(grabBand(v, 0.5, 1)) || zxDecode(grabBand(v, 1, 1)) || (liveN % 2 ? zxDecode(grabBand(v, 0.5, 2)) : null);
+    if (liveDet) { try { const r = await liveDet.detect(v); const hit = (r || []).find(x => plausible(x.rawValue)); if (hit) code = hit.rawValue; } catch (e) {} }
+    if (!code) {
+      const k = liveN % 3;
+      const t = zxDecode(k === 0 ? grabBand(v, 0.35, 1) : k === 1 ? grabBand(v, 0.35, 1.5) : grabBand(v, 0.6, 1));
+      if (t && plausible(t)) code = t;
+    }
   }
   if (code && liveStream) {
+    const t = Date.now();
+    if (liveCand.code === code) liveCand.n++; else liveCand = { code, n: 1 };
     // 同一個條碼一直在畫面裡只算一次；要移開超過 1 秒再對準才會再 +1
-    const t = Date.now(), same = code === lastLive.code && t - lastLive.t < 1000;
-    lastLive = { code, t };
-    if (!same) onCode(code, 'live');
+    if (liveCand.n >= 2 || liveDet) {
+      const fresh = !(code === lastLive.code && t - lastLive.t < 1000);
+      lastLive = { code, t };
+      if (fresh) onCode(code, 'live');
+    }
   }
-  if (liveStream) liveTimer = setTimeout(liveLoop, 200);
+  if (liveStream) liveTimer = setTimeout(liveLoop, 120);
 }
 // 取畫面中間一條（框框的位置）；scale＝放大倍數
 function grabBand(v, frac, scale) {
