@@ -535,7 +535,7 @@ async function startLive() {
     }
   } catch (e) {}
   liveN = 0;
-  $('camMsg').textContent = '條碼橫放在畫面中間；同款要移開再對準才會再 +1';
+  $('camMsg').textContent = '條碼橫放在畫面中間；框框變綠＝已記錄，移開換下一件';
   liveLoop();
 }
 
@@ -575,6 +575,11 @@ async function openCam(deviceId) {
   setTimeout(camInfo, 600);
   return null;
 }
+function camFlash() {
+  const a = document.querySelector('#cam .aim');
+  a.style.borderColor = '#2ECC71'; a.style.background = 'rgba(46,204,113,.25)';
+  setTimeout(() => { a.style.borderColor = ''; a.style.background = ''; }, 500);
+}
 function camInfo() {
   if (!liveStream) return;
   const tr = liveStream.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
@@ -599,7 +604,7 @@ const plausible = c => { c = norm(c); return c.length >= 5 && (/[A-Z]/.test(c) |
 
 // 連續掃：抓畫面辨識；同一個結果連續讀到 2 次才算數（避免看錯）
 // 每輪只跑一種 ZXing 方式，輪流：中間一條原尺寸 → 中間一條放大 1.5 倍 → 較寬一條原尺寸
-let liveCand = { code: '', n: 0 };
+let liveCand = { code: '', n: 0 }, livePause = 0;
 async function liveLoop() {
   if (!liveStream) return;
   const v = $('vid');
@@ -616,13 +621,18 @@ async function liveLoop() {
   if (code && liveStream) {
     const t = Date.now();
     if (liveCand.code === code) liveCand.n++; else liveCand = { code, n: 1 };
-    // 同一個條碼一直在畫面裡只算一次；要移開超過 1 秒再對準才會再 +1
-    if (liveCand.n >= 2 || liveDet) {
-      const fresh = !(code === lastLive.code && t - lastLive.t < 1000);
+    // 單上有的條碼連續讀到 2 次才算；單上沒有的要連續 4 次（避免看錯亂跳）
+    const need = S.order && findLine(code) ? 2 : 4;
+    if (code === lastLive.code && t - lastLive.t < 1000) {
+      lastLive.t = t;                       // 同一件還在畫面裡：不重複算，要移開超過 1 秒
+    } else if (liveCand.n >= need && t >= livePause) {
       lastLive = { code, t };
-      if (fresh) onCode(code, 'live');
+      livePause = t + 1200;                 // 算完休息 1.2 秒，換下一件
+      liveCand = { code: '', n: 0 };
+      onCode(code, 'live');
+      camFlash();
     }
-  }
+  } else if (!code) liveCand = { code: '', n: 0 };
   if (liveStream) liveTimer = setTimeout(liveLoop, 120);
 }
 // 取畫面中間一條（框框的位置）；scale＝放大倍數
