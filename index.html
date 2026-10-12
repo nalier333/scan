@@ -73,7 +73,7 @@ button { font: inherit; cursor: pointer; }
 .footer .in { max-width: 640px; margin: 0 auto; display: flex; gap: 8px; align-items: center; }
 .footer .in .sum { flex: 1; font-size: 14px; }
 .cam { position: fixed; inset: 0; background: #000; z-index: 50; display: flex; flex-direction: column; }
-.cam video { flex: 1; width: 100%; object-fit: cover; }
+.cam video { flex: 1; width: 100%; min-height: 0; object-fit: contain; background: #000; }
 .cam .aim { position: absolute; left: 8%; right: 8%; top: 38%; height: 22%; border: 3px solid rgba(255,255,255,.8); border-radius: 12px; pointer-events: none; }
 .cam .bottom { padding: 12px; display: flex; gap: 8px; align-items: center; background: rgba(0,0,0,.6); }
 .cam .msg { flex: 1; color: #fff; font-weight: 700; font-size: 16px; }
@@ -225,6 +225,7 @@ const S = { store: ls.get('aud.store'), who: ls.get('aud.who'), stores: [], need
             audits: [], order: null, pending: {}, inflight: {}, flushing: false, whPw: ls.get('aud.whpw') };
 
 async function boot() {
+  if (!IN_GAS && IN_APP) $('msg').innerHTML = `LINE／FB 裡面開的網頁不能用連續掃。<a href="${esc(externalUrl())}">用手機瀏覽器開啟</a>`;
   if (!IN_GAS && !API_URL) { show('vSetup'); return; }
   $('whoName').value = S.who;
   $('whoName').onchange = () => { S.who = $('whoName').value.trim(); ls.set('aud.who', S.who); };
@@ -427,22 +428,29 @@ function zx() {
   return zxReader;
 }
 
+// 用 ZXing 解一張 canvas（兩種黑白判斷方式都試）
+function zxDecode(c) {
+  const z = zx(); if (!z) return null;
+  for (const B of [ZXing.HybridBinarizer, ZXing.GlobalHistogramBinarizer]) {
+    try { return z.decode(new ZXing.BinaryBitmap(new B(new ZXing.HTMLCanvasElementLuminanceSource(c)))).getText(); } catch (e) {}
+  }
+  return null;
+}
+
 async function decodeFile(file) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('讀不到照片')); i.src = url; });
     let det = null;
     if ('BarcodeDetector' in window) { try { det = new BarcodeDetector({ formats: FORMATS }); } catch (e) { det = null; } }
-    for (const size of [1400, 2000, 900]) {
+    for (const size of [0, 1400, 2000, 900]) {   // 0＝原尺寸（太大才縮小）
       for (const rot of [0, 90]) {
         const c = drawScaled(img, size, rot);
         if (det) { try { const r = await det.detect(c); if (r && r.length) return r[0].rawValue; } catch (e) {} }
         const z = zx();
         if (z) {
-          try {
-            const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)));
-            return z.decode(bmp).getText();
-          } catch (e) { /* 這個大小／角度找不到，換下一個 */ }
+          const t = zxDecode(c);
+          if (t) return t;
         }
       }
     }
@@ -450,44 +458,117 @@ async function decodeFile(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 function drawScaled(img, max, rot) {
-  const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
-  const w = Math.round(img.naturalWidth * s), h = Math.round(img.naturalHeight * s);
+  const big = Math.max(img.naturalWidth || img.videoWidth, img.naturalHeight || img.videoHeight);
+  const s = max ? Math.min(3, max / big) : Math.min(1, 2400 / big);
+  const w = Math.round((img.naturalWidth || img.videoWidth) * s), h = Math.round((img.naturalHeight || img.videoHeight) * s);
   const c = document.createElement('canvas');
   c.width = rot ? h : w; c.height = rot ? w : h;
   const g = c.getContext('2d');
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
   if (rot) { g.translate(h / 2, w / 2); g.rotate(rot * Math.PI / 180); g.drawImage(img, -w / 2, -h / 2, w, h); }
   else g.drawImage(img, 0, 0, w, h);
   return c;
 }
 
 // ---------- 連續掃（即時相機；有些手機／瀏覽器不允許，就改用拍照） ----------
-let liveCtl = null, lastLive = { code: '', t: 0 };
+let liveCtl = null, liveStream = null, lastLive = { code: '', t: 0 };   // t＝最後一次看到這個條碼的時間
+const UA = navigator.userAgent || '';
+const IN_LINE = /\bLine\//i.test(UA), IN_APP = IN_LINE || /FBAN|FBAV|Instagram|MicroMessenger/i.test(UA);
+function externalUrl() { return location.origin + location.pathname + '?openExternalBrowser=1' + (API_URL ? '&api=' + encodeURIComponent(API_URL) : ''); }
+
+function liveFail(title, sub, raw) {
+  stopLive();
+  setFb('warn', title, sub + (raw ? '（' + raw + '）' : ''));
+  if (IN_GAS && S.liveUrl) $('fb').innerHTML += `<a class="btn primary" style="display:block;text-align:center;margin-top:8px;text-decoration:none" target="_blank" href="${esc(S.liveUrl)}">🎥 開「連續掃」版本</a>`;
+  else if (IN_LINE) $('fb').innerHTML += `<a class="btn primary" style="display:block;text-align:center;margin-top:8px;text-decoration:none" href="${esc(externalUrl())}">用手機瀏覽器開啟</a>`;
+}
+
+function camError(e) {
+  const n = e && e.name || '';
+  if (n === 'NotAllowedError' || n === 'SecurityError' || n === 'PermissionDeniedError') {
+    if (IN_GAS) return ['這個網址不能開即時相機', '請用「📷 拍條碼」，或開「連續掃」版本', n];
+    if (IN_APP) return ['LINE／FB 裡面的瀏覽器不能開相機', '請按下面按鈕改用 Chrome 或 Safari 開啟', n];
+    return ['相機權限被拒絕', /iPhone|iPad/.test(UA)
+      ? 'iPhone：設定 → Safari → 相機 → 選「允許」，再回來重新整理'
+      : 'Chrome：點網址列左邊的圖示 → 權限 → 相機 → 允許，再重新整理', n];
+  }
+  if (n === 'NotFoundError' || n === 'DevicesNotFoundError') return ['找不到相機', '這台裝置沒有可以用的相機', n];
+  if (n === 'NotReadableError' || n === 'TrackStartError') return ['相機被其他 App 占用', '把其他用到相機的 App 關掉再試一次', n];
+  return ['開不了相機', '請改用「📷 拍條碼」', n || (e && e.message) || ''];
+}
+
 async function startLive() {
-  if (!window.ZXing) return setFb('warn', '掃描元件沒載入，請重新整理');
+  if (!window.ZXing) return setFb('warn', '掃描元件沒載入', '請檢查網路後重新整理');
+  if (!window.isSecureContext) return liveFail('網址要是 https 才能開相機', '', 'insecure');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return IN_APP ? liveFail('LINE／FB 裡面的瀏覽器不能開相機', '請按下面按鈕改用 Chrome 或 Safari 開啟', 'no mediaDevices')
+                  : liveFail('這個瀏覽器不支援相機', '請用 Chrome 或 Safari 開啟', 'no mediaDevices');
+  }
   $('cam').classList.remove('hidden');
   $('camMsg').textContent = '開啟相機中…';
+  let stream = null, err = null;
   try {
-    const reader = new ZXing.BrowserMultiFormatReader(zx() ? zxHints : undefined, 300);
-    liveCtl = reader;
-    await reader.decodeFromConstraints({ video: { facingMode: 'environment', width: { ideal: 1280 } } }, $('vid'), (res) => {
-      if (!res) return;
-      const code = res.getText(), t = Date.now();
-      if (code === lastLive.code && t - lastLive.t < 2500) return;   // 同一個條碼 2.5 秒內不重複算
-      lastLive = { code, t };
-      onCode(code, 'live');
-    });
-    $('camMsg').textContent = '把條碼對準框框';
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
   } catch (e) {
-    stopLive();
-    if (IN_GAS && S.liveUrl) {
-      setFb('warn', '這個網址不能開即時相機', '');
-      $('fb').innerHTML += `<a class="btn primary" style="display:block;text-align:center;margin-top:8px;text-decoration:none" target="_blank" href="${esc(S.liveUrl)}">🎥 開「連續掃」版本</a>`;
-    } else setFb('warn', '這支手機在這個網頁不能開即時相機', '請改用「📷 拍條碼」（一樣會自動辨識）');
+    err = e;
+    if (e && (e.name === 'OverconstrainedError' || e.name === 'ConstraintNotSatisfiedError')) {
+      try { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); err = null; } catch (e2) { err = e2; }
+    }
   }
+  if (!stream) return liveFail(...camError(err));
+  liveStream = stream;
+  try {
+    const v = $('vid');
+    v.setAttribute('playsinline', ''); v.muted = true; v.srcObject = stream;
+    await v.play();
+    // 能自動對焦的手機打開連續對焦
+    try { const tr = stream.getVideoTracks()[0], cap = tr.getCapabilities ? tr.getCapabilities() : {};
+          if (cap.focusMode && cap.focusMode.indexOf('continuous') >= 0) await tr.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
+    liveDet = null;
+    if ('BarcodeDetector' in window) { try { liveDet = new BarcodeDetector({ formats: FORMATS }); } catch (e) { liveDet = null; } }
+    liveN = 0;
+    $('camMsg').textContent = '條碼整條放進畫面；同款要移開再對準才會再 +1';
+    liveLoop();
+  } catch (e) { liveFail(...camError(e)); }
+}
+
+// 連續掃：每 0.2 秒抓一張畫面，先用手機內建辨識，再把中間那條放大給 ZXing 辨識
+let liveDet = null, liveN = 0, liveTimer = null;
+async function liveLoop() {
+  if (!liveStream) return;
+  const v = $('vid');
+  let code = null;
+  if (v.videoWidth) {
+    liveN++;
+    if (liveDet) { try { const r = await liveDet.detect(v); if (r && r.length) code = r[0].rawValue; } catch (e) {} }
+    // 每次試三種：原尺寸中間一條、原尺寸整張、放大兩倍中間一條（條碼很細時）
+    if (!code) code = zxDecode(grabBand(v, 0.5, 1)) || zxDecode(grabBand(v, 1, 1)) || (liveN % 2 ? zxDecode(grabBand(v, 0.5, 2)) : null);
+  }
+  if (code && liveStream) {
+    // 同一個條碼一直在畫面裡只算一次；要移開超過 1 秒再對準才會再 +1
+    const t = Date.now(), same = code === lastLive.code && t - lastLive.t < 1000;
+    lastLive = { code, t };
+    if (!same) onCode(code, 'live');
+  }
+  if (liveStream) liveTimer = setTimeout(liveLoop, 200);
+}
+// 取畫面中間一條（框框的位置）；scale＝放大倍數
+function grabBand(v, frac, scale) {
+  const W = v.videoWidth, H = v.videoHeight;
+  const bh = Math.round(H * frac), y = Math.round((H - bh) / 2);
+  scale = Math.min(scale || 1, 2600 / W);
+  const c = document.createElement('canvas');
+  c.width = Math.round(W * scale); c.height = Math.round(bh * scale);
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.drawImage(v, 0, y, W, bh, 0, 0, c.width, c.height);
+  return c;
 }
 function stopLive() {
+  clearTimeout(liveTimer);
   try { liveCtl && liveCtl.reset(); } catch (e) {}
-  liveCtl = null;
+  try { liveStream && liveStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  liveCtl = null; liveStream = null;
   $('cam').classList.add('hidden');
 }
 
