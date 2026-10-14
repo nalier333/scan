@@ -55,6 +55,11 @@ button { font: inherit; cursor: pointer; }
 .fb.warn { background: var(--warn-bg); color: var(--warn); }
 .fb.info { background: #fff; color: var(--muted); font-weight: 400; border: 1px dashed var(--line); }
 .fb small { display: block; font-weight: 400; font-size: 13px; margin-top: 2px; }
+.grpRow { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 15px; }
+.grpRow input { width: 22px; height: 22px; }
+.grpCur { margin-top: 6px; font-size: 14px; color: var(--muted); }
+.fb .skip { display: inline-block; margin-top: 8px; padding: 6px 12px; border-radius: 8px; border: 1px solid currentColor; background: #fff; color: inherit; font-size: 14px; font-weight: 700; }
+.sec.cur { color: #1565C0; }
 .sec { font-weight: 700; margin: 14px 2px 6px; display: flex; justify-content: space-between; }
 .ln { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--line); border-left: 6px solid #C9D1DA; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
 .ln.part { border-left-color: var(--warn); }
@@ -159,6 +164,8 @@ button { font: inherit; cursor: pointer; }
         <input id="codeIn" placeholder="手動輸入條碼（條碼槍直接刷，不用點這裡）" autocomplete="off" autocapitalize="characters" enterkeyhint="done">
         <button class="btn" onclick="typed()">加入</button>
       </div>
+      <label class="grpRow"><input type="checkbox" id="grpOn" onchange="setGrp(this.checked)"> 整組刷完才換下一款</label>
+      <div class="grpCur hidden" id="grpCur"></div>
       <div class="fb info" id="fb">拍一張商品吊牌上的條碼，就會自動 +1</div>
     </div>
     <div id="lines"></div>
@@ -296,7 +303,9 @@ async function openOrder(no) {
   showErr('');
   try {
     S.order = await run('getAudit', no);
-    S.pending = {}; S.inflight = {};
+    S.pending = {}; S.inflight = {}; S.curSku = '';
+    if (S.grp) { const g = skuList().find(k => { const t = skuLeft(k); return t.got > 0 && t.left > 0; }); if (g) S.curSku = g; }
+    $('grpOn').checked = S.grp;
     show('vOrder'); renderOrder();
     setFb('info', '拍一張商品吊牌上的條碼，就會自動 +1');
   } catch (e) { showErr(e); }
@@ -330,14 +339,19 @@ function renderOrder(flashCode) {
   $('fSum').innerHTML = closed() ? `${badge(o.status)} ${esc(o.done || '')}` : `<b>${all}</b> / ${exp} 件`;
 
   const cls = l => { const n = shown(l); return l.qty === 0 ? 'extra' : n > l.qty ? 'over' : n === l.qty ? 'done' : n > 0 ? 'part' : ''; };
+  if (S.grp && S.curSku && skuLeft(S.curSku).left <= 0) S.curSku = '';
+  const isCur = l => S.grp && S.curSku && skuOf(l) === S.curSku && ['', 'part'].includes(cls(l));
+  $('grpCur').innerHTML = grpCurText();
+  $('grpCur').classList.toggle('hidden', !$('grpCur').innerHTML);
   const groups = [
+    ['▶ 正在刷 ' + (S.curSku || ''), lines.filter(isCur), 'cur'],
     ['⚠ 有問題（多刷／不在單上）', lines.filter(l => ['over', 'extra'].includes(cls(l)))],
-    ['還沒刷齊', lines.filter(l => ['', 'part'].includes(cls(l)))],
+    ['還沒刷齊', lines.filter(l => ['', 'part'].includes(cls(l)) && !isCur(l))],
     ['✅ 已刷齊', lines.filter(l => cls(l) === 'done')]
   ];
   const ro = closed() || S.store === '倉庫';
-  $('lines').innerHTML = groups.filter(g => g[1].length).map(([t, ls]) =>
-    `<div class="sec"><span>${t}</span><span class="muted">${ls.length} 款</span></div>` +
+  $('lines').innerHTML = groups.filter(g => g[1].length).map(([t, ls, c]) =>
+    `<div class="sec ${c || ''}"><span>${t}</span><span class="muted">${ls.length} 款</span></div>` +
     ls.map(l => `<div class="ln ${cls(l)} ${flashCode && l.code === flashCode ? 'flash' : ''}" data-code="${esc(l.code)}">
       <div class="info"><div class="t">${esc(l.sku || '')} ${esc(l.style || '')}</div>
         <div class="muted">${esc(l.name || '')}</div><div class="c">${esc(l.code)}</div></div>
@@ -365,22 +379,79 @@ function addCount(code, d) {
 }
 
 // 刷到一個條碼
+// ---------- 整組模式：同一個商品編號（所有顏色尺寸）刷齊了才可以刷下一款 ----------
+S.grp = ls.get('aud.grp') === '1'; S.curSku = '';
+const skuOf = l => l.sku || l.code;
+function skuList() { const a = []; S.order.lines.forEach(l => { if (l.qty > 0 && a.indexOf(skuOf(l)) < 0) a.push(skuOf(l)); }); return a; }
+// 這一款還差幾件、還差哪些
+function skuLeft(sku) {
+  let left = 0, got = 0; const miss = [];
+  S.order.lines.filter(l => skuOf(l) === sku && l.qty > 0).forEach(l => {
+    const n = shown(l); got += n;
+    if (n < l.qty) { left += l.qty - n; miss.push((l.style || l.code) + ' ×' + (l.qty - n)); }
+  });
+  return { left, got, miss };
+}
+function setGrp(on) {
+  S.grp = on; ls.set('aud.grp', on ? '1' : '');
+  S.curSku = '';
+  if (on && S.order) { const g = skuList().find(k => { const t = skuLeft(k); return t.got > 0 && t.left > 0; }); if (g) S.curSku = g; }
+  renderOrder();
+  setFb('info', on ? '整組模式：一款的所有顏色尺寸刷齊了，才可以刷下一款' : '已關閉整組模式，任何一款都可以刷');
+}
+function skipGrp() {
+  const k = S.curSku; S.curSku = '';
+  renderOrder();
+  setFb('warn', '已先跳過 ' + k, '這款還沒刷齊，等一下可以再回來刷');
+}
+function grpCurText() {
+  if (!S.grp || !S.curSku) return '';
+  const t = skuLeft(S.curSku);
+  return `▶ 正在刷 <b>${esc(S.curSku)}</b>，還差 ${t.left} 件：${esc(t.miss.join('、'))}`;
+}
+function scrollToLine(code) {
+  const el = Array.from(document.querySelectorAll('#lines .ln')).find(x => x.dataset.code === code);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 function onCode(raw, src) {
   if (!S.order || closed()) return;
   const code = norm(raw);
   if (!code) return;
   if (code === norm(S.order.no) || /^0027\d{11}$/.test(code)) { beep(false); return setFb('warn', '這是出貨單的條碼', '請刷商品吊牌上的條碼'); }
   const l = findLine(code);
+  // 整組模式：正在刷的那款還沒齊，刷到別款就擋下來（不算數）
+  if (l && S.grp && l.qty > 0) {
+    if (S.curSku && skuLeft(S.curSku).left <= 0) S.curSku = '';
+    if (S.curSku && skuOf(l) !== S.curSku) {
+      const t = skuLeft(S.curSku);
+      beep(false);
+      setFb('bad', `⛔ 先刷完 ${S.curSku}，這件 ${skuOf(l)} 沒有算`, `${S.curSku} 還差 ${t.left} 件：${t.miss.join('、')}`);
+      $('fb').innerHTML += `<button class="skip" onclick="skipGrp()">${esc(S.curSku)} 貨不夠，先跳過</button>`;
+      if (src === 'live') $('camMsg').textContent = '⛔ 先刷完 ' + S.curSku + '，還差 ' + t.left + ' 件';
+      renderOrder();
+      const first = S.order.lines.find(x => skuOf(x) === S.curSku && shown(x) < x.qty);
+      if (first) scrollToLine(first.code);
+      return;
+    }
+    if (!S.curSku) S.curSku = skuOf(l);
+  }
   if (l) {
     addCount(l.code, 1);
     const n = shown(l);
     if (n > l.qty) { beep(false); setFb('bad', '❗ 多了：' + (l.sku || l.code) + ' ' + l.style, `已刷 ${n}，單上只有 ${l.qty} 件`); }
     else { beep(true); setFb('ok', (n === l.qty ? '✅ 到齊 ' : '＋1 ') + (l.sku || l.code) + ' ' + l.style, `${n} / ${l.qty}　${l.name}`); }
+    if (S.grp && S.curSku === skuOf(l) && skuLeft(S.curSku).left <= 0) {
+      S.curSku = '';
+      if (n <= l.qty) setFb('ok', `✅ ${skuOf(l)} 整組刷齊了`, '可以刷下一款');
+    }
     renderOrder(l.code);
+    scrollToLine(l.code);
   } else {
     addCount(code, 1);
     beep(false); setFb('bad', '❗ 不在這張單上：' + code, '已記錄成「多出」，刷錯可以按「－」扣掉');
     renderOrder(code);
+    scrollToLine(code);
   }
   if (src === 'live') $('camMsg').textContent = $('fb').textContent;
 }
