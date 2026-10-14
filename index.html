@@ -156,7 +156,7 @@ button { font: inherit; cursor: pointer; }
       </div>
       <input type="file" id="photo" accept="image/*" capture="environment" hidden>
       <div class="typeRow">
-        <input id="codeIn" placeholder="手動輸入條碼（或用藍牙條碼槍）" autocomplete="off" autocapitalize="characters" enterkeyhint="done">
+        <input id="codeIn" placeholder="手動輸入條碼（條碼槍直接刷，不用點這裡）" autocomplete="off" autocapitalize="characters" enterkeyhint="done">
         <button class="btn" onclick="typed()">加入</button>
       </div>
       <div class="fb info" id="fb">拍一張商品吊牌上的條碼，就會自動 +1</div>
@@ -407,6 +407,26 @@ async function flush() {
 
 function typed() { const v = $('codeIn').value; $('codeIn').value = ''; onCode(v, 'type'); $('codeIn').focus(); }
 $('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); typed(); } });
+// 條碼槍：審核單打開時，不用先點框框，游標在哪裡刷都會算
+// （條碼槍像鍵盤一樣很快打完一串字再按 Enter；游標在別的輸入框裡就不攔，避免打字被吃掉）
+let gunBuf = '', gunT = 0;
+document.addEventListener('keydown', e => {
+  if ($('vOrder').hidden || !S.order) return;
+  const el = e.target, tag = el && el.tagName;
+  if (el && el.id === 'codeIn') return;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el && el.isContentEditable)) return;
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const now = Date.now();
+  if (now - gunT > 500) gunBuf = '';       // 隔太久就重新開始收
+  gunT = now;
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    if (gunBuf.trim().length >= 3) { e.preventDefault(); onCode(gunBuf, 'type'); }
+    gunBuf = '';
+  } else if (e.key && e.key.length === 1) {
+    gunBuf += e.key;
+    if (e.key === ' ') e.preventDefault();   // 空白鍵不要讓頁面捲動
+  }
+});
 
 async function doFinish() {
   await flush();
