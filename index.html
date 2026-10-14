@@ -80,6 +80,10 @@ button { font: inherit; cursor: pointer; }
 .cam .camTop { position: absolute; left: 0; right: 0; top: 0; padding: 8px 12px; background: rgba(0,0,0,.45); color: #fff; font-size: 12px; }
 .cam .zoomRow { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 14px; }
 .cam .zoomRow input { flex: 1; }
+.cam .modeRow { display: flex; gap: 6px; margin-top: 6px; }
+.cam .modeRow button { flex: 1; padding: 6px; border-radius: 8px; border: 1px solid rgba(255,255,255,.5); background: transparent; color: #fff; font-size: 14px; }
+.cam .modeRow button.on { background: #fff; color: #000; font-weight: 700; }
+
 .toast { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); background: var(--fg); color: #fff; padding: 8px 16px; border-radius: 999px; z-index: 60; font-size: 14px; max-width: 90vw; }
 .err { color: var(--bad); }
 .pv { display: flex; gap: 10px; align-items: center; }
@@ -172,6 +176,11 @@ button { font: inherit; cursor: pointer; }
   <div class="aim"></div>
   <div class="camTop">
     <div id="camInfo"></div>
+    <div class="modeRow"><button id="mOld" onclick="setMode('old')">舊模式</button><button id="mStrict" onclick="setMode('strict')">自動算（嚴格）</button></div>
+    <div id="oldSet" class="hidden">
+      <div class="zoomRow">移開 <input type="range" id="oldGap" min="0.2" max="3" step="0.1"> <span id="oldGapVal"></span> 再算</div>
+      <div class="zoomRow">算完休息 <input type="range" id="oldRest" min="0" max="3" step="0.1"> <span id="oldRestVal"></span></div>
+    </div>
     <div class="zoomRow hidden" id="zoomRow">🔍 <input type="range" id="zoom" min="1" max="4" step="0.1" value="1"> <span id="zoomVal"></span></div>
   </div>
   <div class="bottom"><div class="msg" id="camMsg">把條碼對準框框</div>
@@ -534,8 +543,8 @@ async function startLive() {
       if (main && main.deviceId !== curId) { const e2 = await openCam(main.deviceId); if (e2) await openCam(''); }
     }
   } catch (e) {}
-  liveN = 0;
-  $('camMsg').textContent = '條碼橫放在畫面中間；框框變綠＝已記錄，移開換下一件';
+  liveN = 0; initOldSet(); setMode(liveMode);
+  $('camMsg').textContent = '條碼橫放在框框裡；框框變綠＝已記錄，移開換下一件';
   liveLoop();
 }
 
@@ -602,35 +611,76 @@ let liveDet = null, liveN = 0, liveTimer = null;
 // 看起來像我們的條碼嗎：商品條碼有英文字（例如 UT40-88-M），出貨單是 0027 開頭 15 碼
 const plausible = c => { c = norm(c); return c.length >= 5 && (/[A-Z]/.test(c) || /^0027\d{11}$/.test(c)); };
 
-// 連續掃：抓畫面辨識；同一個結果連續讀到 2 次才算數（避免看錯）
-// 每輪只跑一種 ZXing 方式，輪流：中間一條原尺寸 → 中間一條放大 1.5 倍 → 較寬一條原尺寸
-let liveCand = { code: '', n: 0 }, livePause = 0;
+// 連續掃：抓畫面辨識；同一個結果連續讀到幾次才算（避免看錯）
+// 每個條碼各自記「最後看到的時間」，要離開畫面 1.5 秒以上才會再算一次（鏡頭好、畫面裡有很多條碼也不會亂跳）
+let liveCand = { code: '', n: 0 }, livePause = 0, liveSeen = {}, liveDone = {};
+// 兩種模式：old＝舊模式（整個畫面都掃、同一個條碼移開幾秒再算可自己調、連讀 2／4 次）
+//           strict＝自動算嚴格（只認框框附近、每個條碼分開記、移開 1.5 秒再算、連讀 3／5 次）
+let liveMode = ls.get('aud.mode') === 'old' ? 'old' : 'strict';
+function setMode(m) {
+  liveMode = m; ls.set('aud.mode', m);
+  $('mOld').classList.toggle('on', m === 'old'); $('mStrict').classList.toggle('on', m === 'strict');
+  liveSeen = {}; liveDone = {}; lastLive = { code: '', t: 0 }; liveCand = { code: '', n: 0 };
+  $('oldSet').classList.toggle('hidden', m !== 'old');
+}
+// 舊模式的時間可以自己調（秒），手機會記住；預設 移開 1 秒、休息 1.2 秒
+let oldGap = ls.get('aud.oldGap') === '' ? 1 : Number(ls.get('aud.oldGap'));
+let oldRest = ls.get('aud.oldRest') === '' ? 1.2 : Number(ls.get('aud.oldRest'));
+function initOldSet() {
+  const g = $('oldGap'), r = $('oldRest');
+  g.value = oldGap; r.value = oldRest;
+  const show = () => { $('oldGapVal').textContent = Number(g.value).toFixed(1) + ' 秒'; $('oldRestVal').textContent = Number(r.value).toFixed(1) + ' 秒'; };
+  g.oninput = () => { oldGap = Number(g.value); ls.set('aud.oldGap', g.value); show(); };
+  r.oninput = () => { oldRest = Number(r.value); ls.set('aud.oldRest', r.value); show(); };
+  show();
+}
+// 手機內建辨識會掃整個畫面：只收中間那一帶（框框附近）的條碼，旁邊別張吊牌不算
+function inAim(x, v) {
+  const b = x.boundingBox; if (!b || !v.videoHeight) return true;
+  const cy = (b.top + b.bottom) / 2 / v.videoHeight, cx = (b.left + b.right) / 2 / v.videoWidth;
+  return cy > 0.25 && cy < 0.75 && cx > 0.1 && cx < 0.9;
+}
 async function liveLoop() {
   if (!liveStream) return;
   const v = $('vid');
   let code = null;
   if (v.videoWidth) {
     liveN++;
-    if (liveDet) { try { const r = await liveDet.detect(v); const hit = (r || []).find(x => plausible(x.rawValue)); if (hit) code = hit.rawValue; } catch (e) {} }
+    if (liveDet) { try { const r = await liveDet.detect(v); const hit = (r || []).find(x => plausible(x.rawValue) && (liveMode === 'old' || inAim(x, v))); if (hit) code = hit.rawValue; } catch (e) {} }
     if (!code) {
       const k = liveN % 3;
-      const t = zxDecode(k === 0 ? grabBand(v, 0.35, 1) : k === 1 ? grabBand(v, 0.35, 1.5) : grabBand(v, 0.6, 1));
+      const t = zxDecode(k === 0 ? grabBand(v, 0.35, 1) : k === 1 ? grabBand(v, 0.35, 1.5) : grabBand(v, liveMode === 'old' ? 0.6 : 0.5, 1));
       if (t && plausible(t)) code = t;
     }
   }
+  const t = Date.now();
   if (code && liveStream) {
-    const t = Date.now();
     if (liveCand.code === code) liveCand.n++; else liveCand = { code, n: 1 };
-    // 單上有的條碼連續讀到 2 次才算；單上沒有的要連續 4 次（避免看錯亂跳）
-    const need = S.order && findLine(code) ? 2 : 4;
-    if (code === lastLive.code && t - lastLive.t < 1000) {
-      lastLive.t = t;                       // 同一件還在畫面裡：不重複算，要移開超過 1 秒
-    } else if (liveCand.n >= need && t >= livePause) {
-      lastLive = { code, t };
-      livePause = t + 1200;                 // 算完休息 1.2 秒，換下一件
-      liveCand = { code: '', n: 0 };
-      onCode(code, 'live');
-      camFlash();
+    const onOrder = S.order && findLine(code);
+    if (liveMode === 'old') {
+      // 舊模式：單上有的連讀 2 次、沒有的 4 次；同一件還在畫面裡不重複算，要移開超過 1 秒
+      const need = onOrder ? 2 : 4;
+      if (code === lastLive.code && t - lastLive.t < oldGap * 1000) {
+        lastLive.t = t;
+      } else if (liveCand.n >= need && t >= livePause) {
+        lastLive = { code, t };
+        livePause = t + oldRest * 1000;
+        liveCand = { code: '', n: 0 };
+        onCode(code, 'live');
+        camFlash();
+      }
+    } else {
+      // 嚴格：單上有的連讀 3 次、沒有的 5 次；每個條碼分開記，離開畫面超過 1.5 秒才會再算
+      const need = onOrder ? 3 : 5;
+      if (t - (liveSeen[code] || 0) > 1500) liveDone[code] = false;
+      liveSeen[code] = t;
+      if (liveCand.n >= need && !liveDone[code] && t >= livePause) {
+        liveDone[code] = true;
+        livePause = t + 1200;               // 算完休息 1.2 秒，換下一件
+        liveCand = { code: '', n: 0 };
+        onCode(code, 'live');
+        camFlash();
+      }
     }
   } else if (!code) liveCand = { code: '', n: 0 };
   if (liveStream) liveTimer = setTimeout(liveLoop, 120);
