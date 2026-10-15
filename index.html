@@ -58,6 +58,7 @@ button { font: inherit; cursor: pointer; }
 .grpRow { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 15px; }
 .grpRow input { width: 22px; height: 22px; }
 .grpCur { margin-top: 6px; font-size: 14px; color: var(--muted); }
+.fb .skip.fill { display: block; width: 100%; margin-top: 10px; padding: 12px; font-size: 17px; background: var(--ok); color: #fff; border-color: transparent; }
 .fb .skip { display: inline-block; margin-top: 8px; padding: 6px 12px; border-radius: 8px; border: 1px solid currentColor; background: #fff; color: inherit; font-size: 14px; font-weight: 700; }
 .sec.cur { color: #1565C0; }
 .sec { font-weight: 700; margin: 14px 2px 6px; display: flex; justify-content: space-between; }
@@ -372,6 +373,27 @@ $('lines').addEventListener('click', e => {
   renderOrder(code);
 });
 
+// 刷了一件之後，提示框裡的「缺幾件全部算到」按鈕：這一列直接補到單上數量
+function fillLine(code) {
+  if (!S.order || closed()) return;
+  const l = findLine(code); if (!l) return;
+  const d = l.qty - shown(l);
+  if (d <= 0) return;
+  addCount(l.code, d);
+  beep(true);
+  setFb('ok', `✅ 到齊 ${l.sku || l.code} ${l.style || ''}`, `${shown(l)} / ${l.qty}　（一次補 ${d} 件）`);
+  if (S.grp && S.curSku === skuOf(l) && skuLeft(S.curSku).left <= 0) {
+    S.curSku = '';
+    setFb('ok', `✅ ${skuOf(l)} 整組刷齊了`, '可以刷下一款');
+  }
+  renderOrder(l.code);
+  scrollToLine(l.code);
+}
+function fillBtn(l) {
+  const left = l.qty - shown(l);
+  return left > 0 ? `<button class="skip fill" onclick="fillLine('${esc(l.code)}')">✅ 缺 ${left} 件全部算到</button>` : '';
+}
+
 function setFb(kind, text, sub) { $('fb').className = 'fb ' + kind; $('fb').innerHTML = esc(text) + (sub ? `<small>${esc(sub)}</small>` : ''); }
 
 function addCount(code, d) {
@@ -443,6 +465,7 @@ function onCode(raw, src) {
     const n = shown(l);
     if (n > l.qty) { beep(false); setFb('bad', '❗ 多了：' + (l.sku || l.code) + ' ' + l.style, `已刷 ${n}，單上只有 ${l.qty} 件`); }
     else { beep(true); setFb('ok', (n === l.qty ? '✅ 到齊 ' : '＋1 ') + (l.sku || l.code) + ' ' + l.style, `${n} / ${l.qty}　${l.name}`); }
+    if (n < l.qty) $('fb').innerHTML += fillBtn(l);   // 缺幾件全部算到
     if (S.grp && S.curSku === skuOf(l) && skuLeft(S.curSku).left <= 0) {
       S.curSku = '';
       if (n <= l.qty) setFb('ok', `✅ ${skuOf(l)} 整組刷齊了`, '可以刷下一款');
@@ -455,7 +478,7 @@ function onCode(raw, src) {
     renderOrder(code);
     scrollToLine(code);
   }
-  if (src === 'live') $('camMsg').textContent = $('fb').textContent;
+  if (src === 'live') $('camMsg').textContent = Array.from($('fb').childNodes).filter(n => n.tagName !== 'BUTTON').map(n => n.textContent).join(' ');
 }
 
 async function flush() {
