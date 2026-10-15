@@ -164,7 +164,7 @@ button { font: inherit; cursor: pointer; }
         <input id="codeIn" placeholder="手動輸入條碼（條碼槍直接刷，不用點這裡）" autocomplete="off" autocapitalize="characters" enterkeyhint="done">
         <button class="btn" onclick="typed()">加入</button>
       </div>
-      <label class="grpRow"><input type="checkbox" id="grpOn" onchange="setGrp(this.checked)"> 整組刷完才換下一款</label>
+      <label class="grpRow"><input type="checkbox" id="grpOn" onchange="setGrp(this.checked); this.blur()"> 整組刷完才換下一款</label>
       <div class="grpCur hidden" id="grpCur"></div>
       <div class="fb info" id="fb">拍一張商品吊牌上的條碼，就會自動 +1</div>
     </div>
@@ -175,6 +175,7 @@ button { font: inherit; cursor: pointer; }
 <div class="footer hidden" id="foot"><div class="in">
   <button class="btn" onclick="backToList()">‹ 返回</button>
   <div class="sum" id="fSum"></div>
+  <button class="btn" id="resetBtn" onclick="doReset()">🔄 重刷</button>
   <button class="btn ok" id="finBtn" onclick="doFinish()">完成審核</button>
 </div></div>
 
@@ -336,6 +337,7 @@ function renderOrder(flashCode) {
   $('oDiff').textContent = o.diff || '';
   $('scanBox').classList.toggle('hidden', closed());
   $('finBtn').classList.toggle('hidden', closed());
+  $('resetBtn').classList.toggle('hidden', closed());
   $('fSum').innerHTML = closed() ? `${badge(o.status)} ${esc(o.done || '')}` : `<b>${all}</b> / ${exp} 件`;
 
   const cls = l => { const n = shown(l); return l.qty === 0 ? 'extra' : n > l.qty ? 'over' : n === l.qty ? 'done' : n > 0 ? 'part' : ''; };
@@ -476,7 +478,8 @@ async function flush() {
   if (Object.keys(S.pending).length) setTimeout(flush, 300);
 }
 
-function typed() { const v = $('codeIn').value; $('codeIn').value = ''; onCode(v, 'type'); $('codeIn').focus(); }
+// 手動輸入完就把游標移開：游標不在輸入框裡，條碼槍就不會被注音輸入法吃掉
+function typed() { const v = $('codeIn').value; $('codeIn').value = ''; onCode(v, 'type'); $('codeIn').blur(); }
 $('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); typed(); } });
 // 條碼槍：審核單打開時，不用先點框框，游標在哪裡刷都會算
 // （條碼槍像鍵盤一樣很快打完一串字再按 Enter；游標在別的輸入框裡就不攔，避免打字被吃掉）
@@ -485,7 +488,10 @@ document.addEventListener('keydown', e => {
   if ($('vOrder').hidden || !S.order) return;
   const el = e.target, tag = el && el.tagName;
   if (el && el.id === 'codeIn') return;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el && el.isContentEditable)) return;
+  // 只有游標在「打字的框」裡才不攔；勾選框、按鈕被點過也照樣能刷
+  const texty = tag === 'TEXTAREA' || (el && el.isContentEditable) ||
+    (tag === 'INPUT' && /^(text|search|number|tel|url|email|password)$/i.test(el.type || 'text'));
+  if (texty) return;
   if (e.ctrlKey || e.altKey || e.metaKey) return;
   const now = Date.now();
   if (now - gunT > 500) gunBuf = '';       // 隔太久就重新開始收
@@ -495,9 +501,30 @@ document.addEventListener('keydown', e => {
     gunBuf = '';
   } else if (e.key && e.key.length === 1) {
     gunBuf += e.key;
-    if (e.key === ' ') e.preventDefault();   // 空白鍵不要讓頁面捲動
+    if (e.key === ' ') e.preventDefault();   // 空白鍵不要讓頁面捲動、不要去按到勾選框
+  } else if (e.code) {
+    // 輸入法開著時 e.key 會變成 Process：改看實體按鍵
+    const m = e.code.match(/^Key([A-Z])$|^Digit(\d)$|^Numpad(\d)$/);
+    if (m) gunBuf += m[1] || m[2] || m[3];
+    else if (e.code === 'Minus' || e.code === 'NumpadSubtract') gunBuf += '-';
+    else if (e.code === 'Period' || e.code === 'NumpadDecimal') gunBuf += '.';
+    else if (e.code === 'Slash' || e.code === 'NumpadDivide') gunBuf += '/';
   }
 });
+
+// 全部重刷：這張單已刷的數量全部歸 0
+async function doReset() {
+  if (!S.order || closed()) return;
+  if (!confirm('這張單刷過的數量全部歸 0，重新刷一次？\n（多刷、不在單上的也會清掉）')) return;
+  try {
+    clearTimeout(addCount.t);
+    S.pending = {}; S.inflight = {}; S.curSku = '';
+    S.order = await run('resetScan', S.order.no, S.who);
+    renderOrder();
+    setFb('info', '已全部歸 0，可以重新刷了');
+    window.scrollTo(0, 0);
+  } catch (e) { showErr(e); }
+}
 
 async function doFinish() {
   await flush();
